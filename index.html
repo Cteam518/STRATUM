@@ -1,0 +1,1788 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STRATUM — תיעוד סטרטיגרפי</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800;900&family=Public+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<script>
+// ═══════ PIN AUTH ═══════
+function initAuth() {
+  const users = JSON.parse(localStorage.getItem('stratum_users') || '[]');
+  if (users.length === 0) {
+    showView('register');
+  } else {
+    const lastUser = users[users.length - 1];
+    showView('login');
+    document.getElementById('loginGreeting').textContent = 'שלום, ' + lastUser.name + ' 👋';
+    document.getElementById('loginBigAvatar').textContent = lastUser.name.charAt(0).toUpperCase();
+    window._loginUser = lastUser;
+  }
+}
+
+function showView(v) {
+  document.getElementById('viewRegister').style.display = v === 'register' ? 'block' : 'none';
+  document.getElementById('viewLogin').style.display = v === 'login' ? 'block' : 'none';
+  document.getElementById('loginError').style.display = 'none';
+}
+
+function doRegister() {
+  const name = document.getElementById('regName').value.trim();
+  const pin = document.getElementById('regPin').value;
+  const pin2 = document.getElementById('regPin2').value;
+  const err = document.getElementById('loginError');
+
+  if (!name) { showError('נא להזין שם'); return; }
+  if (pin.length !== 4 || !/^\d{4}$/.test(pin)) { showError('קוד PIN חייב להיות 4 ספרות'); return; }
+  if (pin !== pin2) { showError('קודי ה-PIN אינם תואמים'); return; }
+
+  const users = JSON.parse(localStorage.getItem('stratum_users') || '[]');
+  const user = { name, pinHash: btoa(pin), id: Date.now().toString() };
+  users.push(user);
+  localStorage.setItem('stratum_users', JSON.stringify(users));
+  enterApp(user);
+}
+
+function doLogin() {
+  const pin = document.getElementById('loginPin').value;
+  const user = window._loginUser;
+  if (!user) return;
+  if (btoa(pin) !== user.pinHash) {
+    showError('קוד PIN שגוי');
+    document.getElementById('loginPin').value = '';
+    return;
+  }
+  enterApp(user);
+}
+
+function showError(msg) {
+  const err = document.getElementById('loginError');
+  err.textContent = msg;
+  err.style.display = 'block';
+}
+
+function enterApp(user) {
+  window._currentUser = user;
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appRoot').style.display = 'flex';
+  // Update avatar
+  const avatar = document.getElementById('profileAvatar');
+  if (avatar) avatar.textContent = user.name.charAt(0).toUpperCase();
+  // Update logout modal
+  const ln = document.getElementById('logoutUserName');
+  const le = document.getElementById('logoutUserEmail');
+  if (ln) ln.textContent = user.name;
+  if (le) le.textContent = 'STRATUM · ' + user.id.slice(-4);
+  // Load this user findings
+  findings = JSON.parse(localStorage.getItem('stratum_findings_' + user.id) || '[]');
+  applyFilters();
+  updateSettingsCount();
+}
+
+window.doLogout = function() {
+  window._currentUser = null;
+  findings = [];
+  closeModal('logoutModal');
+  document.getElementById('appRoot').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  // Reset pin field
+  const lp = document.getElementById('loginPin');
+  if (lp) lp.value = '';
+  initAuth();
+};
+
+window.onload = () => {
+  initAuth();
+  const today = new Date().toISOString().split('T')[0];
+  document.getElementById('entryDate').value = today;
+  generateBasketId();
+  if (darkMode) applyDark();
+  updatePreview();
+};
+</script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --primary: #3a5400;
+    --primary-light: #5c8200;
+    --on-primary: #ffffff;
+    --primary-container: #d8f19d;
+    --on-primary-container: #0f1f00;
+    --secondary: #725a39;
+    --surface: #fbfbe2;
+    --on-surface: #1b1d0e;
+    --surface-low: #f5f5dc;
+    --surface-mid: #eaead1;
+    --surface-high: #e4e4cc;
+    --muted: #6b7060;
+    --outline: #c5c8b8;
+    --error: #ba1a1a;
+    --radius: 14px;
+    --radius-sm: 8px;
+    --shadow: 0 2px 16px rgba(0,0,0,0.08);
+    --shadow-lg: 0 8px 40px rgba(0,0,0,0.16);
+  }
+
+  body {
+    font-family: 'Public Sans', sans-serif;
+    background: var(--surface);
+    color: var(--on-surface);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ---- LAYOUT ---- */
+  .app { display: flex; flex-direction: column; min-height: 100vh; }
+
+  header {
+    position: sticky; top: 0; z-index: 50;
+    background: var(--surface);
+    border-bottom: 1px solid var(--outline);
+    padding: 0 20px;
+    height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .logo {
+    font-family: 'Manrope', sans-serif;
+    font-weight: 900; font-size: 18px;
+    letter-spacing: 4px; color: var(--primary);
+    text-transform: uppercase;
+  }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+  .header-screen-title {
+    font-size: 13px; font-weight: 600;
+    color: var(--muted); letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  main { flex: 1; padding: 24px 20px 100px; max-width: 760px; margin: 0 auto; width: 100%; }
+
+  /* ---- BOTTOM NAV ---- */
+  .bottom-nav {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+    background: var(--surface);
+    border-top: 1px solid var(--outline);
+    display: flex;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    gap: 4px; padding: 10px 0; cursor: pointer;
+    border: none; background: none; color: var(--muted);
+    font-size: 11px; font-family: 'Public Sans', sans-serif; font-weight: 500;
+    transition: color 0.2s;
+    letter-spacing: 0.5px;
+  }
+  .nav-item.active { color: var(--primary); }
+  .nav-item svg { width: 22px; height: 22px; }
+  .nav-icon-wrap {
+    width: 36px; height: 24px; display: flex; align-items: center; justify-content: center;
+    border-radius: 12px; transition: background 0.2s;
+  }
+  .nav-item.active .nav-icon-wrap { background: var(--primary-container); }
+
+  /* ---- SCREENS ---- */
+  .screen { display: none; animation: fadeIn 0.2s ease; }
+  .screen.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ---- CARDS ---- */
+  .card {
+    background: var(--surface-low);
+    border: 1px solid var(--outline);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .card-body { padding: 20px; }
+
+  /* ---- FORMS ---- */
+  .form-group { margin-bottom: 20px; }
+  .form-label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .form-label svg { width: 15px; height: 15px; }
+  .form-input {
+    width: 100%; padding: 14px 16px;
+    background: var(--surface-low);
+    border: 1px solid var(--outline);
+    border-radius: var(--radius-sm);
+    font-family: 'Public Sans', sans-serif;
+    font-size: 15px; color: var(--on-surface);
+    transition: border-color 0.2s, box-shadow 0.2s;
+    direction: rtl;
+  }
+  .form-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(58,84,0,0.12);
+  }
+  .form-input::placeholder { color: #aaa; }
+
+  .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+  /* ---- BUTTONS ---- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 8px; padding: 14px 24px;
+    border: none; border-radius: var(--radius-sm);
+    font-family: 'Manrope', sans-serif; font-weight: 700;
+    font-size: 14px; letter-spacing: 0.5px;
+    cursor: pointer; transition: all 0.15s; text-transform: uppercase;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary { background: var(--primary); color: var(--on-primary); width: 100%; }
+  .btn-primary:hover { background: var(--primary-light); }
+  .btn-ghost {
+    background: var(--surface-mid);
+    color: var(--on-surface);
+    border: 1px solid var(--outline);
+  }
+  .btn-ghost:hover { background: var(--surface-high); }
+  .btn-sm { padding: 8px 14px; font-size: 12px; }
+  .btn-icon { padding: 10px; width: 42px; height: 42px; border-radius: var(--radius-sm); }
+  .btn-danger { background: #fff0f0; color: var(--error); border: 1px solid #ffc5c5; }
+  .btn-danger:hover { background: #ffe0e0; }
+
+  /* ---- TOGGLE ---- */
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px;
+    background: var(--surface-mid);
+    border-radius: var(--radius-sm);
+    margin-bottom: 10px;
+    cursor: pointer;
+  }
+  .toggle-row:last-child { margin-bottom: 0; }
+  .toggle-info { display: flex; align-items: center; gap: 12px; }
+  .toggle-texts h4 { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+  .toggle-texts p { font-size: 12px; color: var(--muted); }
+  .toggle-icon {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: var(--surface-high);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted);
+  }
+  .toggle-icon svg { width: 17px; height: 17px; }
+  .toggle-switch {
+    width: 44px; height: 24px; border-radius: 12px;
+    background: var(--outline); position: relative;
+    transition: background 0.2s; flex-shrink: 0;
+  }
+  .toggle-switch.on { background: var(--primary); }
+  .toggle-switch::after {
+    content: ''; position: absolute;
+    top: 3px; right: 3px;
+    width: 18px; height: 18px; border-radius: 50%; background: white;
+    transition: transform 0.2s;
+  }
+  .toggle-switch.on::after { transform: translateX(-20px); }
+  .toggle-row.disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* ---- SETTINGS SECTION ---- */
+  .settings-section {
+    background: var(--surface-low);
+    border: 1px solid var(--outline);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .settings-section h3 {
+    font-family: 'Manrope', sans-serif;
+    font-size: 17px; font-weight: 800;
+    margin-bottom: 6px;
+  }
+  .settings-section > p { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+
+  /* ---- SEARCH BAR ---- */
+  .search-bar {
+    display: flex; align-items: center; gap: 0;
+    background: var(--surface-mid);
+    border: 1px solid var(--outline);
+    border-radius: var(--radius-sm);
+    overflow: hidden; margin-bottom: 24px;
+  }
+  .search-icon { padding: 0 14px; color: var(--muted); flex-shrink: 0; }
+  .search-icon svg { display: block; width: 18px; height: 18px; }
+  .search-input {
+    flex: 1; border: none; background: none;
+    padding: 14px 4px; font-family: 'Public Sans', sans-serif;
+    font-size: 14px; color: var(--on-surface);
+    direction: rtl;
+  }
+  .search-input:focus { outline: none; }
+  .search-input::placeholder { color: #aaa; }
+  .search-btn {
+    background: var(--primary); color: white;
+    border: none; padding: 12px 20px;
+    font-family: 'Manrope', sans-serif;
+    font-weight: 700; font-size: 13px;
+    cursor: pointer; letter-spacing: 0.5px;
+  }
+
+  /* ---- FINDINGS GRID ---- */
+  .findings-empty {
+    text-align: center; padding: 60px 20px;
+    color: var(--muted);
+  }
+  .findings-empty .empty-icon {
+    width: 64px; height: 64px; border-radius: 50%;
+    background: var(--surface-high);
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 16px; opacity: 0.5;
+  }
+  .findings-empty .empty-icon svg { width: 28px; height: 28px; }
+  .findings-empty p { font-size: 14px; font-style: italic; }
+
+  .findings-list { display: flex; flex-direction: column; gap: 14px; }
+
+  .finding-card {
+    background: var(--surface-low);
+    border: 1px solid var(--outline);
+    border-radius: var(--radius);
+    overflow: hidden;
+    cursor: pointer;
+    transition: box-shadow 0.2s, transform 0.2s;
+  }
+  .finding-card:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
+  .finding-card-inner { display: flex; align-items: stretch; }
+  .finding-img {
+    width: 110px; flex-shrink: 0;
+    background: var(--surface-high);
+    overflow: hidden; position: relative;
+  }
+  .finding-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .finding-img-placeholder {
+    width: 100%; height: 100%; min-height: 90px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); opacity: 0.4;
+  }
+  .finding-img-placeholder svg { width: 28px; height: 28px; }
+  .finding-content { flex: 1; padding: 14px 16px; display: flex; flex-direction: column; justify-content: space-between; }
+  .finding-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+  .finding-basket {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px; font-weight: 500;
+    color: var(--primary);
+  }
+  .finding-date { font-size: 12px; color: var(--muted); }
+  .finding-site { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .finding-meta { display: flex; gap: 12px; }
+  .finding-meta-item {
+    font-size: 11px; color: var(--muted);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .finding-meta-item svg { width: 12px; height: 12px; }
+  .finding-actions { display: flex; gap: 6px; align-items: center; }
+  .icon-btn {
+    width: 32px; height: 32px; border-radius: 6px;
+    background: var(--surface-mid);
+    border: 1px solid var(--outline);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--muted);
+    transition: all 0.15s;
+  }
+  .icon-btn:hover { background: var(--surface-high); color: var(--on-surface); }
+  .icon-btn svg { width: 14px; height: 14px; }
+  .icon-btn.danger:hover { background: #fff0f0; color: var(--error); border-color: #ffc5c5; }
+
+  /* ---- PREVIEW CARD ---- */
+  .preview-label {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    position: relative;
+    max-width: 360px;
+  }
+  .preview-label-row { display: flex; justify-content: space-between; align-items: flex-start; }
+  .preview-label-site { font-size: 9px; color: #999; margin-bottom: 2px; }
+  .preview-area-box {
+    width: 36px; height: 36px;
+    border: 2px solid #222;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 700;
+    font-family: 'Manrope', sans-serif;
+  }
+  .preview-basket-num { font-size: 22px; font-weight: 700; letter-spacing: 1px; margin: 4px 0; }
+  .preview-details-row { display: flex; gap: 16px; font-size: 9px; color: #666; }
+  .preview-watermark {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Manrope', sans-serif;
+    font-size: 28px; font-weight: 900; letter-spacing: 6px;
+    color: rgba(58,84,0,0.06); pointer-events: none;
+    text-transform: uppercase;
+  }
+  .preview-qr { display: flex; align-items: flex-end; gap: 8px; margin-top: 6px; }
+
+  /* ---- MODAL ---- */
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(4px);
+    align-items: flex-end; justify-content: center;
+    padding: 0;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--surface);
+    border-radius: 20px 20px 0 0;
+    width: 100%; max-width: 600px;
+    max-height: 90vh; overflow-y: auto;
+    padding: 28px 24px 40px;
+    animation: slideUp 0.25s ease;
+  }
+  @keyframes slideUp { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .modal-handle {
+    width: 40px; height: 4px;
+    background: var(--outline);
+    border-radius: 2px;
+    margin: 0 auto 24px;
+  }
+  .modal-title {
+    font-family: 'Manrope', sans-serif;
+    font-size: 20px; font-weight: 800;
+    margin-bottom: 20px;
+  }
+
+  /* ---- PAGE TITLES ---- */
+  .page-title {
+    font-family: 'Manrope', sans-serif;
+    font-size: 26px; font-weight: 900;
+    letter-spacing: -0.5px;
+    margin-bottom: 6px;
+  }
+  .page-subtitle { font-size: 13px; color: var(--muted); margin-bottom: 24px; font-style: italic; }
+
+  /* ---- SELECT ---- */
+  .select-input {
+    width: 100%; padding: 13px 16px;
+    background: var(--surface-low);
+    border: 1px solid var(--outline);
+    border-radius: var(--radius-sm);
+    font-family: 'Public Sans', sans-serif;
+    font-size: 15px; color: var(--on-surface);
+    appearance: none; cursor: pointer;
+    direction: rtl;
+  }
+  .select-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(58,84,0,0.12); }
+  .select-wrap { position: relative; }
+  .select-wrap::after {
+    content: '▾'; position: absolute;
+    left: 14px; top: 50%; transform: translateY(-50%);
+    color: var(--muted); pointer-events: none;
+    font-size: 13px;
+  }
+
+  /* ---- CAMERA / IMAGE ---- */
+  .camera-btn {
+    width: 100%; padding: 28px;
+    border: 2px dashed var(--outline);
+    border-radius: var(--radius);
+    background: var(--surface-low);
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    cursor: pointer; color: var(--muted);
+    transition: border-color 0.2s, background 0.2s;
+    font-family: 'Public Sans', sans-serif;
+  }
+  .camera-btn:hover { border-color: var(--primary); background: var(--surface-mid); color: var(--primary); }
+  .camera-btn svg { width: 32px; height: 32px; }
+  .camera-btn span { font-size: 14px; font-weight: 500; }
+  .captured-preview {
+    width: 100%; aspect-ratio: 4/3;
+    border-radius: var(--radius);
+    overflow: hidden; position: relative;
+    border: 1px solid var(--outline);
+  }
+  .captured-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .captured-preview .change-photo {
+    position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.65); color: white;
+    border: none; border-radius: 20px;
+    padding: 6px 16px; font-size: 12px;
+    cursor: pointer; font-family: 'Public Sans', sans-serif;
+    backdrop-filter: blur(4px);
+  }
+
+  /* ---- CHIP ---- */
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; border-radius: 20px;
+    font-size: 11px; font-weight: 600;
+    background: var(--primary-container);
+    color: var(--on-primary-container);
+  }
+
+  /* ---- PRINT ---- */
+  @media print {
+    @page { size: 50mm 30mm; margin: 0; }
+    body * { visibility: hidden; }
+    #printable-label, #printable-label * { visibility: visible; }
+    #printable-label {
+      position: fixed; left: 0; top: 0;
+      width: 50mm; height: 30mm;
+      padding: 2mm;
+      background: white; color: black;
+      display: flex; flex-direction: row; align-items: stretch;
+      font-family: 'Public Sans', sans-serif;
+      direction: rtl;
+    }
+    #printable-label div { font-size: 11px !important; }
+  }
+
+  /* ---- DETAIL MODAL ---- */
+  .detail-hero {
+    width: 100%; aspect-ratio: 16/9;
+    border-radius: var(--radius-sm);
+    overflow: hidden; background: var(--surface-high);
+    margin-bottom: 20px;
+  }
+  .detail-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+  .detail-field {
+    background: var(--surface-mid);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+  }
+  .detail-field label { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 4px; }
+  .detail-field span { font-size: 15px; font-weight: 600; }
+  .detail-basket {
+    background: var(--primary-container);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px; margin-bottom: 20px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .detail-basket label { font-size: 11px; font-weight: 700; color: var(--on-primary-container); opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 4px; }
+  .detail-basket span {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 22px; font-weight: 700;
+    color: var(--primary);
+  }
+
+  .section-divider {
+    display: flex; align-items: center; gap: 10px;
+    margin: 24px 0 18px;
+    font-size: 12px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .section-divider::before, .section-divider::after {
+    content: ''; flex: 1; height: 1px; background: var(--outline);
+  }
+
+  /* language select highlight */
+  .lang-option {
+    padding: 10px 14px; border-radius: var(--radius-sm);
+    border: 2px solid var(--outline);
+    background: var(--surface-low);
+    cursor: pointer; font-size: 14px; font-weight: 500;
+    transition: all 0.15s;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .lang-option.selected { border-color: var(--primary); background: var(--primary-container); }
+  .lang-row { display: flex; gap: 10px; }
+
+.spinner {
+    display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);
+    border-top-color:currentColor;border-radius:50%;animation:spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .notice {
+    background: #fffbe6;
+    border: 1px solid #f0d060;
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    font-size: 12px; color: #7a5c00;
+    margin-top: 12px;
+  }
+
+  /* ---- FILTER BAR ---- */
+  .filter-bar { margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .filter-chips-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .filter-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 12px; border-radius: 20px;
+    border: 1.5px solid var(--outline);
+    background: var(--surface-low);
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; color: var(--muted);
+    transition: all 0.15s; white-space: nowrap;
+    font-family: 'Public Sans', sans-serif;
+  }
+  .filter-chip:hover { border-color: var(--primary); color: var(--primary); }
+  .filter-chip.active { background: var(--primary-container); border-color: var(--primary); color: var(--on-primary-container); }
+  .filter-chip svg { width: 13px; height: 13px; }
+  .filter-panel {
+    display: none; background: var(--surface-low);
+    border: 1px solid var(--outline); border-radius: var(--radius);
+    padding: 16px; gap: 12px; flex-direction: column;
+  }
+  .filter-panel.open { display: flex; }
+  .filter-panel-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .filter-panel-field { flex: 1; min-width: 120px; }
+  .filter-panel-field label {
+    font-size: 11px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    display: block; margin-bottom: 5px;
+  }
+  .filter-panel-field input,
+  .filter-panel-field select {
+    width: 100%; padding: 9px 12px;
+    background: var(--surface); border: 1px solid var(--outline);
+    border-radius: var(--radius-sm);
+    font-family: 'Public Sans', sans-serif;
+    font-size: 13px; color: var(--on-surface); direction: rtl;
+  }
+  .filter-panel-field input:focus,
+  .filter-panel-field select:focus { outline: none; border-color: var(--primary); }
+  .filter-active-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+  .filter-tag {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; background: var(--primary-container);
+    color: var(--on-primary-container); border-radius: 20px;
+    font-size: 11px; font-weight: 600; cursor: pointer;
+    font-family: 'Public Sans', sans-serif;
+  }
+  .filter-tag svg { width: 11px; height: 11px; }
+  .area-btn {
+    width: 30px; height: 30px;
+    border-radius: 6px;
+    border: 1.5px solid var(--outline);
+    background: var(--surface);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.12s;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0;
+  }
+  .area-btn:hover { border-color: var(--primary); color: var(--primary); }
+  .area-btn.selected {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--on-primary);
+  }
+ font-size: 12px; color: var(--muted); margin-bottom: 12px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="loginScreen" style="display:flex;min-height:100vh;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;background:var(--surface);">
+  <div style="width:100%;max-width:320px;">
+
+    <!-- Logo -->
+    <div style="text-align:center;margin-bottom:44px;">
+      <div style="width:64px;height:64px;border-radius:20px;background:var(--primary);display:flex;align-items:center;justify-content:center;margin:0 auto 18px;">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </div>
+      <div style="font-family:'Manrope',sans-serif;font-weight:900;font-size:28px;letter-spacing:5px;color:var(--primary);">STRATUM</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:8px;font-style:italic;">תיעוד סטרטיגרפי מקצועי</div>
+    </div>
+
+    <!-- REGISTER view (shown first time) -->
+    <div id="viewRegister" style="display:none;">
+      <div style="font-family:'Manrope',sans-serif;font-size:17px;font-weight:800;margin-bottom:6px;text-align:center;">יצירת חשבון</div>
+      <div style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:24px;">הזן שם ובחר קוד PIN</div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">שם</label>
+        <input id="regName" type="text" placeholder="השם שלך..." class="form-input" style="width:100%;" />
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">קוד PIN (4 ספרות)</label>
+        <input id="regPin" type="password" inputmode="numeric" maxlength="4" placeholder="••••" class="form-input" style="width:100%;letter-spacing:6px;font-size:20px;text-align:center;" />
+      </div>
+      <div style="margin-bottom:24px;">
+        <label style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">אימות PIN</label>
+        <input id="regPin2" type="password" inputmode="numeric" maxlength="4" placeholder="••••" class="form-input" style="width:100%;letter-spacing:6px;font-size:20px;text-align:center;" />
+      </div>
+      <button onclick="doRegister()" class="btn btn-primary" style="width:100%;margin-bottom:14px;">צור חשבון</button>
+      <button onclick="showView('login')" style="width:100%;background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:8px;">יש לי כבר חשבון</button>
+    </div>
+
+    <!-- LOGIN view -->
+    <div id="viewLogin" style="display:none;">
+      <div style="font-family:'Manrope',sans-serif;font-size:17px;font-weight:800;margin-bottom:6px;text-align:center;" id="loginGreeting">ברוך הבא</div>
+      <div style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:24px;">הזן את קוד ה-PIN שלך</div>
+      <div id="loginAvatarWrap" style="text-align:center;margin-bottom:20px;">
+        <div id="loginBigAvatar" style="width:60px;height:60px;border-radius:50%;background:var(--primary);display:inline-flex;align-items:center;justify-content:center;color:white;font-family:'Manrope',sans-serif;font-weight:800;font-size:24px;">?</div>
+      </div>
+      <div style="margin-bottom:24px;">
+        <label style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">קוד PIN</label>
+        <input id="loginPin" type="password" inputmode="numeric" maxlength="4" placeholder="••••" class="form-input" style="width:100%;letter-spacing:6px;font-size:20px;text-align:center;" onkeydown="if(event.key==='Enter')doLogin()" />
+      </div>
+      <button onclick="doLogin()" class="btn btn-primary" style="width:100%;margin-bottom:14px;">כניסה</button>
+      <button onclick="showView('register')" style="width:100%;background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:8px;">חשבון חדש</button>
+    </div>
+
+    <div id="loginError" style="display:none;margin-top:16px;padding:10px 14px;background:#fff0f0;border:1px solid #ffc5c5;border-radius:8px;font-size:13px;color:#ba1a1a;text-align:center;"></div>
+  </div>
+</div>
+
+<div id="appRoot" class="app" style="display:none;flex-direction:column;">
+  <!-- HEADER -->
+  <header>
+    <span class="logo">STRATUM</span>
+    <div class="header-right">
+      <span class="header-screen-title" id="screenTitle">מאגר</span>
+      <div onclick="showLogoutConfirm()" id="profileAvatar" style="width:32px;height:32px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;color:white;font-family:'Manrope',sans-serif;font-weight:800;font-size:13px;cursor:pointer;transition:opacity 0.15s;flex-shrink:0;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'" title="התנתק">S</div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTENT -->
+  <main>
+
+    <!-- ═══════ SCREEN: RESERVOIR (מאגר) ═══════ -->
+    <div class="screen active" id="screen-reservoir">
+      <div class="page-title">מאגר</div>
+      <div class="page-subtitle">כל הרישומים הסטרטיגרפיים שלך.</div>
+
+      <!-- Search -->
+      <div class="search-bar">
+        <div class="search-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        </div>
+        <input class="search-input" id="searchInput" type="text" placeholder="חיפוש חופשי..." oninput="applyFilters()" />
+        <button class="search-btn" onclick="applyFilters()">חפש</button>
+      </div>
+
+      <!-- Filter bar -->
+      <div class="filter-bar">
+        <div class="filter-chips-row">
+          <span class="filter-chip" id="chip-filters" onclick="toggleFilterPanel()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
+            סינון
+          </span>
+          <span class="filter-chip" id="chip-site" onclick="focusFilter('filterSite')" title="סנן לפי אתר">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
+            אתר
+          </span>
+          <span class="filter-chip" id="chip-area" onclick="focusFilter('filterArea')" title="סנן לפי שטח">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            שטח
+          </span>
+          <span class="filter-chip" id="chip-locus" onclick="focusFilter('filterLocus')" title="סנן לפי לוקוס">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>
+            לוקוס
+          </span>
+          <span class="filter-chip" id="chip-basket" onclick="focusFilter('filterBasket')" title="סנן לפי סל">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+            סל
+          </span>
+          <span class="filter-chip" id="chip-date" onclick="focusFilter('filterDateFrom')" title="סנן לפי תאריך">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            תאריך
+          </span>
+          <span class="filter-chip" id="chip-reset" onclick="resetFilters()" style="display:none;color:var(--error);border-color:var(--error);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            נקה הכל
+          </span>
+        </div>
+
+        <!-- Filter panel -->
+        <div class="filter-panel" id="filterPanel">
+          <div class="filter-panel-row">
+            <div class="filter-panel-field">
+              <label>אתר</label>
+              <input type="text" id="filterSite" placeholder="כל האתרים..." oninput="applyFilters()" />
+            </div>
+            <div class="filter-panel-field" style="flex:100%;min-width:100%;">
+              <label>שטח</label>
+              <div id="filterAreaGrid" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;">
+                <button type="button" class="area-btn" data-letter="A" onclick="toggleAreaFilter('A')">A</button>
+                <button type="button" class="area-btn" data-letter="B" onclick="toggleAreaFilter('B')">B</button>
+                <button type="button" class="area-btn" data-letter="C" onclick="toggleAreaFilter('C')">C</button>
+                <button type="button" class="area-btn" data-letter="D" onclick="toggleAreaFilter('D')">D</button>
+                <button type="button" class="area-btn" data-letter="E" onclick="toggleAreaFilter('E')">E</button>
+                <button type="button" class="area-btn" data-letter="F" onclick="toggleAreaFilter('F')">F</button>
+                <button type="button" class="area-btn" data-letter="G" onclick="toggleAreaFilter('G')">G</button>
+                <button type="button" class="area-btn" data-letter="H" onclick="toggleAreaFilter('H')">H</button>
+                <button type="button" class="area-btn" data-letter="I" onclick="toggleAreaFilter('I')">I</button>
+                <button type="button" class="area-btn" data-letter="J" onclick="toggleAreaFilter('J')">J</button>
+                <button type="button" class="area-btn" data-letter="K" onclick="toggleAreaFilter('K')">K</button>
+                <button type="button" class="area-btn" data-letter="L" onclick="toggleAreaFilter('L')">L</button>
+                <button type="button" class="area-btn" data-letter="M" onclick="toggleAreaFilter('M')">M</button>
+                <button type="button" class="area-btn" data-letter="N" onclick="toggleAreaFilter('N')">N</button>
+                <button type="button" class="area-btn" data-letter="O" onclick="toggleAreaFilter('O')">O</button>
+                <button type="button" class="area-btn" data-letter="P" onclick="toggleAreaFilter('P')">P</button>
+                <button type="button" class="area-btn" data-letter="Q" onclick="toggleAreaFilter('Q')">Q</button>
+                <button type="button" class="area-btn" data-letter="R" onclick="toggleAreaFilter('R')">R</button>
+                <button type="button" class="area-btn" data-letter="S" onclick="toggleAreaFilter('S')">S</button>
+                <button type="button" class="area-btn" data-letter="T" onclick="toggleAreaFilter('T')">T</button>
+                <button type="button" class="area-btn" data-letter="U" onclick="toggleAreaFilter('U')">U</button>
+                <button type="button" class="area-btn" data-letter="V" onclick="toggleAreaFilter('V')">V</button>
+                <button type="button" class="area-btn" data-letter="W" onclick="toggleAreaFilter('W')">W</button>
+                <button type="button" class="area-btn" data-letter="X" onclick="toggleAreaFilter('X')">X</button>
+                <button type="button" class="area-btn" data-letter="Y" onclick="toggleAreaFilter('Y')">Y</button>
+                <button type="button" class="area-btn" data-letter="Z" onclick="toggleAreaFilter('Z')">Z</button>
+              </div>
+              <input type="hidden" id="filterArea" value="" />
+            </div>
+            <div class="filter-panel-field">
+              <label>לוקוס</label>
+              <input type="text" id="filterLocus" placeholder="כל הלוקוסים..." oninput="applyFilters()" />
+            </div>
+          </div>
+          <div class="filter-panel-row">
+            <div class="filter-panel-field">
+              <label>סל</label>
+              <input type="text" id="filterBasket" placeholder="מספר סל..." oninput="applyFilters()" />
+            </div>
+            <div class="filter-panel-field">
+              <label>מתאריך</label>
+              <input type="date" id="filterDateFrom" onchange="applyFilters()" />
+            </div>
+            <div class="filter-panel-field">
+              <label>עד תאריך</label>
+              <input type="date" id="filterDateTo" onchange="applyFilters()" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Active filter tags -->
+        <div class="filter-active-tags" id="filterActiveTags"></div>
+      </div>
+
+      <div class="results-count" id="resultsCount"></div>
+      <div id="findingsList"></div>
+    </div>
+
+    <!-- ═══════ SCREEN: NEW ENTRY (רישום חדש) ═══════ -->
+    <div class="screen" id="screen-new-entry">
+      <div class="page-title">רישום ממצא חדש</div>
+      <div class="page-subtitle">תיעוד סטרטיגרפי של יחידת חפירה.</div>
+
+      <div class="form-group">
+        <label class="form-label">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          תאריך
+        </label>
+        <input class="form-input" type="date" id="entryDate" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
+          אתר
+        </label>
+        <input class="form-input" type="text" id="entrySite" placeholder="שם האתר..." />
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">שטח</label>
+          <div class="select-wrap">
+            <select class="select-input" id="entryArea">
+              <option value="A">A</option>
+              <option value="B">B</option>
+              <option value="C">C</option>
+              <option value="D">D</option>
+              <option value="E">E</option>
+              <option value="F">F</option>
+              <option value="G">G</option>
+              <option value="H">H</option>
+              <option value="I">I</option>
+              <option value="J">J</option>
+              <option value="K">K</option>
+              <option value="L">L</option>
+              <option value="M">M</option>
+              <option value="N">N</option>
+              <option value="O">O</option>
+              <option value="P">P</option>
+              <option value="Q">Q</option>
+              <option value="R">R</option>
+              <option value="S">S</option>
+              <option value="T">T</option>
+              <option value="U">U</option>
+              <option value="V">V</option>
+              <option value="W">W</option>
+              <option value="X">X</option>
+              <option value="Y">Y</option>
+              <option value="Z">Z</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">לוקוס</label>
+          <input class="form-input" type="text" id="entryLocus" placeholder="---" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">סל</label>
+          <input class="form-input" type="text" id="entryBasket" placeholder="SD123" />
+        </div>
+      </div>
+
+      <!-- Camera / Image -->
+      <div class="form-group">
+        <label class="form-label">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          תמונה
+        </label>
+        <div id="cameraSection">
+          <div class="camera-btn" onclick="document.getElementById('photoInput').click()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            <span>צלם / בחר תמונה</span>
+          </div>
+          <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" onchange="handlePhoto(event)" />
+        </div>
+      </div>
+
+      <!-- Preview -->
+      <div class="section-divider">תצוגה מקדימה</div>
+      <div id="labelPreview" style="margin-bottom:24px;background:white;border:1px solid #ddd;border-radius:8px;padding:12px 16px;display:flex;flex-direction:row;align-items:center;direction:rtl;gap:12px;max-width:360px;">
+        <!-- Text side (right) -->
+        <div style="flex:1;display:flex;flex-direction:column;gap:5px;">
+          <div style="font-size:13px;font-weight:700;color:#111;">תאריך: <span id="prev-date">---</span></div>
+          <div style="font-size:13px;font-weight:700;color:#111;">אתר: <span id="prev-site">---</span></div>
+          <div style="font-size:13px;font-weight:700;color:#111;">שטח: <span id="prev-area">A</span></div>
+          <div style="font-size:13px;font-weight:700;color:#111;">סל: <span id="prev-basket">ASD123</span></div>
+          <div style="font-size:13px;font-weight:700;color:#111;">לוקוס: <span id="prev-locus">---</span></div>
+        </div>
+        <!-- QR side (left) -->
+        <div id="prev-qr" style="width:90px;height:90px;flex-shrink:0;display:flex;align-items:center;justify-content:center;"></div>
+        <!-- hidden legacy -->
+        <span id="prev-area-box" style="display:none;"></span>
+      </div>
+
+      <!-- Save buttons -->
+      <div style="display:flex;gap:10px;margin-bottom:10px;">
+        <button class="btn btn-ghost" style="flex:1;gap:8px;flex-direction:column;padding:12px 8px;" onclick="saveFinding(true)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+          שמירה בלבד
+        </button>
+        <button class="btn btn-ghost" style="flex:1;gap:8px;flex-direction:column;padding:12px 8px;color:var(--primary);border-color:var(--primary);" onclick="saveAndPrint()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+          שמור והדפס
+        </button>
+        <button class="btn btn-primary" style="flex:2;gap:8px;" onclick="saveFinding(false)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          צלם וממצא
+        </button>
+      </div>
+    </div>
+
+    <!-- ═══════ SCREEN: SETTINGS (הגדרות) ═══════ -->
+    <div class="screen" id="screen-settings">
+      <div class="page-title">הגדרות מערכת</div>
+      <div class="page-subtitle">התאמת המכשיר הדיגיטלי לתיעוד אופטימלי בשטח.</div>
+
+      <div class="settings-section">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+          <div>
+            <h3>העדפות תצוגה</h3>
+            <p>התאמת הממשק לתנאי הסביבה.</p>
+          </div>
+          <div style="width:42px;height:42px;border-radius:50%;background:var(--primary-container);display:flex;align-items:center;justify-content:center;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
+        </div>
+        <div class="toggle-row" onclick="toggleDark()">
+          <div class="toggle-info">
+            <div class="toggle-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </div>
+            <div class="toggle-texts">
+              <h4>מצב כהה</h4>
+              <p>הפחתת מאמץ העיניים בתנאי תאורה נמוכים.</p>
+            </div>
+          </div>
+          <div class="toggle-switch" id="darkToggle"></div>
+        </div>
+        <div class="toggle-row disabled">
+          <div class="toggle-info">
+            <div class="toggle-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/></svg>
+            </div>
+            <div class="toggle-texts">
+              <h4>מצב אור שמש ישיר</h4>
+              <p>אופטימיזציה לניגודיות גבוהה בשטח.</p>
+            </div>
+          </div>
+          <div class="toggle-switch"></div>
+        </div>
+      </div>
+
+      <div class="settings-section" style="background:#fff5f5;border-color:#ffd0d0;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+          <div>
+            <h3>שפה ומיקום</h3>
+            <p>שפה</p>
+          </div>
+          <div style="width:42px;height:42px;border-radius:50%;background:#ffe8e8;display:flex;align-items:center;justify-content:center;font-size:20px;">🌐</div>
+        </div>
+        <div class="lang-row" style="margin-bottom:10px;">
+          <div class="lang-option selected" onclick="setLang('he')" id="langHe">🇮🇱 עברית (Hebrew)</div>
+          <div class="lang-option" onclick="setLang('en')" id="langEn">🇺🇸 English</div>
+        </div>
+        <div class="notice" style="background:#fff;border-color:#ffd0d0;color:#8b3a3a;">טקסט הממשק והתוויות ייעדכנו עם הבחירה.</div>
+      </div>
+
+      <div class="settings-section" style="background:white;">
+        <h3 style="margin-bottom:4px;">PROJECT SCOPE</h3>
+        <p style="margin-bottom:16px;">Site Logistics</p>
+        <p style="font-size:13px;color:var(--muted);">Configure the default workspace for field operations and set primary excavation coordinates.</p>
+      </div>
+
+      <div style="padding:16px;background:var(--surface-mid);border-radius:var(--radius-sm);margin-top:8px;">
+        <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--muted);">
+          STRATUM v1.0.0 · Local Storage Mode<br>
+          <span id="findingsCount">0</span> רישומים שמורים במכשיר זה
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- BOTTOM NAV -->
+  <nav class="bottom-nav">
+    <button class="nav-item" id="nav-settings" onclick="navigate('settings')">
+      <div class="nav-icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M20 12h2M2 12h2M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41"/></svg>
+      </div>
+      הגדרות
+    </button>
+    <button class="nav-item active" id="nav-reservoir" onclick="navigate('reservoir')">
+      <div class="nav-icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      </div>
+      מאגר
+    </button>
+    <button class="nav-item" id="nav-new-entry" onclick="navigate('new-entry')">
+      <div class="nav-icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+      </div>
+      רישום
+    </button>
+  </nav>
+</div>
+
+<!-- NIIMBOT MODAL -->
+<div class="modal-backdrop" id="niimbotModal" onclick="closeModal('niimbotModal')">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:360px;margin:0 auto;">
+    <div class="modal-handle"></div>
+    <div style="text-align:center;margin-bottom:20px;">
+      <div style="font-size:28px;margin-bottom:10px;">🖨️</div>
+      <div style="font-family:'Manrope',sans-serif;font-size:18px;font-weight:800;margin-bottom:6px;">הדפסה עם NIIMBOT</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:20px;">המדבקה מוכנה — שמור את התמונה ופתח באפליקציית NIIMBOT</div>
+    </div>
+    <!-- Label image preview -->
+    <div style="background:#f5f5f5;border-radius:10px;padding:16px;text-align:center;margin-bottom:20px;">
+      <img id="niimbotPreviewImg" style="max-width:100%;border-radius:6px;border:1px solid #ddd;" />
+    </div>
+    <!-- Steps -->
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:24px;">
+      <div style="display:flex;align-items:center;gap:12px;font-size:13px;">
+        <div style="width:24px;height:24px;border-radius:50%;background:var(--primary);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;">1</div>
+        <span>לחץ "שמור תמונה" למטה</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;font-size:13px;">
+        <div style="width:24px;height:24px;border-radius:50%;background:var(--primary);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;">2</div>
+        <span>פתח את אפליקציית <strong>NIIMBOT</strong></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;font-size:13px;">
+        <div style="width:24px;height:24px;border-radius:50%;background:var(--primary);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;">3</div>
+        <span>ייבא את התמונה והדפס</span>
+      </div>
+    </div>
+    <a id="niimbotDownloadBtn" download="stratum-label.png" style="display:block;">
+      <button class="btn btn-primary" style="width:100%;margin-bottom:10px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        שמור תמונה
+      </button>
+    </a>
+    <button onclick="closeModal('niimbotModal')" class="btn btn-ghost" style="width:100%;">סגור</button>
+  </div>
+</div>
+
+<!-- EDIT MODAL -->
+<div class="modal-backdrop" id="editModal" onclick="closeModal('editModal')">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:520px;margin:0 auto;">
+    <div class="modal-handle"></div>
+    <div class="modal-title">עריכת ממצא</div>
+    <input type="hidden" id="editId" />
+
+    <div class="form-group">
+      <label class="form-label">תאריך</label>
+      <input class="form-input" type="date" id="editDate" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">אתר</label>
+      <input class="form-input" type="text" id="editSite" placeholder="שם האתר..." />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">שטח</label>
+        <div class="select-wrap">
+          <select class="select-input" id="editArea">
+              <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+              <option value="D">D</option><option value="E">E</option><option value="F">F</option>
+              <option value="G">G</option><option value="H">H</option><option value="I">I</option>
+              <option value="J">J</option><option value="K">K</option><option value="L">L</option>
+              <option value="M">M</option><option value="N">N</option><option value="O">O</option>
+              <option value="P">P</option><option value="Q">Q</option><option value="R">R</option>
+              <option value="S">S</option><option value="T">T</option><option value="U">U</option>
+              <option value="V">V</option><option value="W">W</option><option value="X">X</option>
+              <option value="Y">Y</option><option value="Z">Z</option>
+            </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">לוקוס</label>
+        <input class="form-input" type="text" id="editLocus" placeholder="---" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">סל</label>
+        <input class="form-input" type="text" id="editBasket" placeholder="SD123" />
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:8px;">
+      <button onclick="closeModal('editModal')" class="btn btn-ghost" style="flex:1;">ביטול</button>
+      <button onclick="saveEdit()" class="btn btn-primary" style="flex:2;">שמור שינויים</button>
+    </div>
+  </div>
+</div>
+
+<!-- LOGOUT MODAL -->
+<div class="modal-backdrop" id="logoutModal" onclick="closeModal('logoutModal')">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:360px;margin:0 auto;">
+    <div class="modal-handle"></div>
+    <div style="text-align:center;padding:8px 0 20px;">
+      <div id="logoutAvatarBig" style="width:52px;height:52px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;color:white;font-family:'Manrope',sans-serif;font-weight:800;font-size:20px;margin:0 auto 16px;">S</div>
+      <div id="logoutUserName" style="font-family:'Manrope',sans-serif;font-size:17px;font-weight:800;margin-bottom:4px;"></div>
+      <div id="logoutUserEmail" style="font-size:12px;color:var(--muted);margin-bottom:8px;"></div>
+      <div style="font-size:13px;color:var(--muted);">האם להתנתק?</div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:8px;">
+      <button onclick="closeModal('logoutModal')" style="flex:1;padding:13px;border:1px solid var(--outline);border-radius:8px;background:var(--surface-mid);font-family:'Manrope',sans-serif;font-weight:700;font-size:14px;cursor:pointer;">ביטול</button>
+      <button onclick="doLogout()" style="flex:1;padding:13px;border:none;border-radius:8px;background:#ba1a1a;color:white;font-family:'Manrope',sans-serif;font-weight:700;font-size:14px;cursor:pointer;">התנתק</button>
+    </div>
+  </div>
+</div>
+
+<!-- DETAIL MODAL -->
+<div class="modal-backdrop" id="detailModal" onclick="closeModal('detailModal')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div id="detailContent"></div>
+  </div>
+</div>
+
+<!-- PRINT LABEL (hidden) -->
+<div id="printable-label" style="display:none;">
+  <!-- Right: text info -->
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:3px;padding-left:3mm;">
+    <div style="font-size:11px;font-weight:700;">תאריך: <span id="pl-date">---</span></div>
+    <div style="font-size:11px;font-weight:700;">אתר: <span id="pl-site">---</span></div>
+    <div style="font-size:11px;font-weight:700;">שטח: <span id="pl-area">A</span></div>
+    <div style="font-size:11px;font-weight:700;">סל: <span id="pl-basket">---</span></div>
+    <div style="font-size:11px;font-weight:700;">לוקוס: <span id="pl-locus">---</span></div>
+  </div>
+  <!-- Left: QR code -->
+  <div style="display:flex;align-items:center;justify-content:center;width:28mm;">
+    <div id="pl-qr"></div>
+  </div>
+  <!-- hidden legacy spans -->
+  <span id="pl-area-box" style="display:none;"></span>
+</div>
+
+<script>
+// ═══════ STATE ═══════
+let findings = JSON.parse(localStorage.getItem('stratum_findings') || '[]');
+let darkMode = localStorage.getItem('stratum_dark') === 'true';
+let currentLang = localStorage.getItem('stratum_lang') || 'he';
+let capturedImage = null;
+
+// ═══════ INIT ═══════
+// onload handled by auth script above
+
+// ═══════ NAVIGATION ═══════
+function navigate(screen) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('screen-' + screen).classList.add('active');
+  document.getElementById('nav-' + screen).classList.add('active');
+  const titles = { reservoir: 'מאגר', 'new-entry': 'רישום חדש', settings: 'הגדרות' };
+  document.getElementById('screenTitle').textContent = titles[screen];
+  if (screen === 'new-entry') {
+    generateBasketId();
+    updatePreview();
+  }
+}
+
+// ═══════ BASKET ID ═══════
+function generateBasketId() {
+  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const id = letters[Math.floor(Math.random()*letters.length)] +
+             letters[Math.floor(Math.random()*letters.length)] +
+             letters[Math.floor(Math.random()*letters.length)] +
+             Math.floor(100+Math.random()*900);
+  document.getElementById('entryBasket').value = id;
+  updatePreview();
+}
+
+// ═══════ LIVE PREVIEW ═══════
+function updatePreview() {
+  const date = document.getElementById('entryDate')?.value || '';
+  const site = document.getElementById('entrySite')?.value || '';
+  const area = document.getElementById('entryArea')?.value || 'A';
+  const locus = document.getElementById('entryLocus')?.value || '';
+  const basket = document.getElementById('entryBasket')?.value || 'ASD123';
+
+  const d = new Date(date);
+  const dateStr = isNaN(d.getTime()) ? '---' : `${d.getDate()}.${d.getMonth()+1}.${d.getFullYear()}`;
+
+  document.getElementById('prev-date').textContent = dateStr;
+  document.getElementById('prev-site').textContent = site || '---';
+  document.getElementById('prev-area').textContent = area;
+  document.getElementById('prev-basket').textContent = basket;
+  document.getElementById('prev-locus').textContent = locus || '---';
+
+  // QR — כל הפרטים
+  const qrEl = document.getElementById('prev-qr');
+  qrEl.innerHTML = '';
+  if (typeof QRCode !== 'undefined') {
+    const qrText = `תאריך:${dateStr}|אתר:${site||'---'}|שטח:${area}|סל:${basket}|לוקוס:${locus||'---'}`;
+    new QRCode(qrEl, { text: qrText, width: 90, height: 90, margin: 0, correctLevel: QRCode.CorrectLevel.M });
+  }
+}
+
+// Live update on input changes
+['entryDate','entrySite','entryArea','entryLocus','entryBasket'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', updatePreview);
+  document.getElementById(id)?.addEventListener('change', updatePreview);
+});
+
+// ═══════ PHOTO ═══════
+function handlePhoto(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onloadend = () => {
+    capturedImage = reader.result;
+    const section = document.getElementById('cameraSection');
+    section.innerHTML = `
+      <div class="captured-preview">
+        <img src="${capturedImage}" alt="captured" />
+        <button class="change-photo" onclick="document.getElementById('photoInput2').click()">שנה תמונה</button>
+        <input type="file" id="photoInput2" accept="image/*" capture="environment" style="display:none" onchange="handlePhoto(event)"/>
+      </div>
+    `;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ═══════ SAVE AND PRINT ═══════
+async function saveAndPrint() {
+  const date = document.getElementById('entryDate').value;
+  const site = document.getElementById('entrySite').value || 'אתר לא ידוע';
+  const area = document.getElementById('entryArea').value;
+  const locus = document.getElementById('entryLocus').value || '---';
+  const basket = document.getElementById('entryBasket').value || 'ASD123';
+
+  // Save first
+  await saveFinding(true);
+
+  // Generate label image for NIIMBOT
+  const d = new Date(date);
+  const dateStr = isNaN(d.getTime()) ? '---' : d.getDate()+'.'+(d.getMonth()+1)+'.'+d.getFullYear();
+  await openNiimbotModal({ basketId: basket, site, area, locus, date: dateStr });
+}
+
+async function openNiimbotModal(f) {
+  const qrText = 'תאריך:'+f.date+'|אתר:'+(f.site||'---')+'|שטח:'+f.area+'|סל:'+f.basketId+'|לוקוס:'+(f.locus||'---');
+
+  // Step 1: generate QR using qrcode-generator, draw manually on canvas
+  const qr = qrcode(0, 'M');
+  qr.addData(qrText);
+  qr.make();
+  const moduleCount = qr.getModuleCount();
+  const cellSize = Math.floor(180 / moduleCount);
+  const qrCanvas = document.createElement('canvas');
+  qrCanvas.width = moduleCount * cellSize;
+  qrCanvas.height = moduleCount * cellSize;
+  const qrCtx = qrCanvas.getContext('2d');
+  for (let row = 0; row < moduleCount; row++) {
+    for (let col = 0; col < moduleCount; col++) {
+      qrCtx.fillStyle = qr.isDark(row, col) ? '#000000' : '#ffffff';
+      qrCtx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+    }
+  }
+
+  // Step 2: build the label canvas
+  const scale = 3;
+  const W = 380, H = 150;
+  const canvas = document.createElement('canvas');
+  canvas.width = W * scale;
+  canvas.height = H * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+
+  // White background + border
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#dddddd';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.roundRect(2, 2, W-4, H-4, 10);
+  ctx.stroke();
+
+  // Divider
+  ctx.strokeStyle = '#eeeeee';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(W - 158, 14);
+  ctx.lineTo(W - 158, H - 14);
+  ctx.stroke();
+
+  // Draw QR on LEFT side
+  const qrSize = 122;
+  ctx.drawImage(qrCanvas, W - qrSize - 14, (H - qrSize) / 2, qrSize, qrSize);
+
+  // Text on RIGHT side (RTL)
+  ctx.textAlign = 'right';
+  ctx.direction = 'rtl';
+  ctx.fillStyle = '#111111';
+
+  const lines = [
+    ['תאריך:', f.date],
+    ['אתר:', f.site || '---'],
+    ['שטח:', f.area],
+    ['סל:', f.basketId],
+    ['לוקוס:', f.locus || '---'],
+  ];
+
+  const startX = W - 170;
+  const startY = 26;
+  const lineH = 24;
+
+  lines.forEach(([label, value], i) => {
+    const y = startY + i * lineH;
+    // label
+    ctx.font = '500 26px Arial';
+    ctx.fillStyle = '#888888';
+    ctx.fillText(label, startX, y);
+    // measure label width to place value next to it
+    const labelW = ctx.measureText(label).width;
+    // value
+    ctx.font = 'bold 26px Arial';
+    ctx.fillStyle = '#111111';
+    ctx.fillText(value, startX - labelW - 4, y);
+  });
+
+  const imgData = canvas.toDataURL('image/png');
+  document.getElementById('niimbotPreviewImg').src = imgData;
+  document.getElementById('niimbotDownloadBtn').href = imgData;
+  document.getElementById('niimbotDownloadBtn').download = 'stratum-' + f.basketId + '.png';
+  document.getElementById('niimbotModal').classList.add('open');
+}
+
+// ═══════ SAVE FINDING ═══════
+function saveFinding(saveOnly) {
+  const date = document.getElementById('entryDate').value;
+  const site = document.getElementById('entrySite').value || 'אתר לא ידוע';
+  const area = document.getElementById('entryArea').value;
+  const locus = document.getElementById('entryLocus').value || '---';
+  const basket = document.getElementById('entryBasket').value || 'ASD123';
+
+  const finding = {
+    id: Date.now().toString(),
+    basketId: basket,
+    site, date, area, locus,
+    imageUrl: capturedImage || null,
+    createdAt: new Date().toISOString()
+  };
+
+  findings.unshift(finding);
+  const uid = window._currentUser ? window._currentUser.id : 'guest';
+  localStorage.setItem('stratum_findings_' + uid, JSON.stringify(findings));
+
+  // Reset form
+  capturedImage = null;
+  document.getElementById('entrySite').value = '';
+  document.getElementById('entryLocus').value = '';
+  document.getElementById('cameraSection').innerHTML = `
+    <div class="camera-btn" onclick="document.getElementById('photoInput').click()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+      <span>צלם / בחר תמונה</span>
+    </div>
+    <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" onchange="handlePhoto(event)" />
+  `;
+
+  renderFindings();
+  updateSettingsCount();
+
+  if (saveOnly) {
+    // stay, show brief confirmation
+    const btn = event.target;
+    const orig = btn.innerHTML;
+    btn.innerHTML = '✓ נשמר!';
+    btn.style.background = 'var(--primary)';
+    btn.style.color = 'white';
+    setTimeout(() => { btn.innerHTML = orig; btn.style.background = ''; btn.style.color = ''; }, 1500);
+  } else {
+    navigate('reservoir');
+  }
+}
+
+// ═══════ RENDER FINDINGS ═══════
+function renderFindings(filteredOrQuery) {
+  const list = document.getElementById('findingsList');
+  // Accept either an array (from applyFilters) or a string (legacy)
+  let filtered;
+  if (Array.isArray(filteredOrQuery)) {
+    filtered = filteredOrQuery;
+  } else {
+    const q = (filteredOrQuery || '').toLowerCase();
+    filtered = findings.filter(f =>
+      !q || (f.basketId||'').toLowerCase().includes(q) ||
+      (f.site||'').toLowerCase().includes(q) ||
+      (f.locus||'').toLowerCase().includes(q)
+    );
+  }
+
+  if (filtered.length === 0) {
+    list.innerHTML = `
+      <div class="findings-empty">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        </div>
+        <p>${findings.length > 0 ? 'לא נמצאו ממצאים התואמים את החיפוש.' : 'אין ממצאים עדיין. לחץ רישום להוספה.'}</p>
+      </div>
+    `;
+    return;
+  }
+
+  list.innerHTML = `<div class="findings-list">${filtered.map(f => `
+    <div class="finding-card" onclick="openDetail('${f.id}')">
+      <div class="finding-card-inner">
+        <div class="finding-img">
+          ${f.imageUrl
+            ? `<img src="${f.imageUrl}" alt="${f.basketId}" />`
+            : `<div class="finding-img-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div>`
+          }
+        </div>
+        <div class="finding-content">
+          <div>
+            <div class="finding-top">
+              <span class="finding-basket">${f.basketId}</span>
+              <span class="finding-date">${formatDate(f.date)}</span>
+            </div>
+            <div class="finding-site">${f.site || '---'}</div>
+            <div class="finding-meta">
+              <span class="finding-meta-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                שטח ${f.area}
+              </span>
+              <span class="finding-meta-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>
+                לוקוס ${f.locus || '---'}
+              </span>
+            </div>
+          </div>
+          <div class="finding-actions">
+            <div class="icon-btn" onclick="event.stopPropagation();printLabel('${f.id}')" title="הדפס תווית">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+            </div>
+            <div class="icon-btn" onclick="event.stopPropagation();duplicateFinding('${f.id}')" title="שכפל">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </div>
+            <div class="icon-btn" onclick="event.stopPropagation();openEdit('${f.id}')" title="ערוך">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </div>
+            <div class="icon-btn danger" onclick="event.stopPropagation();deleteFinding('${f.id}')" title="מחק">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `).join('')}</div>`;
+}
+
+function filterFindings() { applyFilters(); }
+
+function applyFilters() {
+  const q        = (document.getElementById('searchInput')?.value || '').toLowerCase();
+  const site     = (document.getElementById('filterSite')?.value || '').toLowerCase();
+  const area     = (document.getElementById('filterArea')?.value || '');
+  const locus    = (document.getElementById('filterLocus')?.value || '').toLowerCase();
+  const basket   = (document.getElementById('filterBasket')?.value || '').toLowerCase();
+  const dateFrom = document.getElementById('filterDateFrom')?.value || '';
+  const dateTo   = document.getElementById('filterDateTo')?.value || '';
+
+  const filtered = findings.filter(f => {
+    if (q && !(
+      (f.basketId||'').toLowerCase().includes(q) ||
+      (f.site||'').toLowerCase().includes(q) ||
+      (f.locus||'').toLowerCase().includes(q) ||
+      (f.area||'').toLowerCase().includes(q)
+    )) return false;
+    if (site   && !(f.site||'').toLowerCase().includes(site)) return false;
+    if (area   && f.area !== area) return false;
+    if (locus  && !(f.locus||'').toLowerCase().includes(locus)) return false;
+    if (basket && !(f.basketId||'').toLowerCase().includes(basket)) return false;
+    if (dateFrom && f.date && f.date < dateFrom) return false;
+    if (dateTo   && f.date && f.date > dateTo)   return false;
+    return true;
+  });
+
+  // Update chip active states
+  document.getElementById('chip-site').classList.toggle('active', !!site);
+  document.getElementById('chip-area').classList.toggle('active', !!area);
+  document.getElementById('chip-locus').classList.toggle('active', !!locus);
+  document.getElementById('chip-basket').classList.toggle('active', !!basket);
+  document.getElementById('chip-date').classList.toggle('active', !!(dateFrom || dateTo));
+  const hasAny = !!(q || site || area || locus || basket || dateFrom || dateTo);
+  document.getElementById('chip-reset').style.display = hasAny ? 'inline-flex' : 'none';
+
+  // Active tags
+  const tagsEl = document.getElementById('filterActiveTags');
+  const tags = [];
+  if (site)     tags.push({ label: 'אתר: ' + site,    clear: () => { document.getElementById('filterSite').value = '';   applyFilters(); } });
+  if (area)     tags.push({ label: 'שטח: ' + area,    clear: () => { document.getElementById('filterArea').value = '';   applyFilters(); } });
+  if (locus)    tags.push({ label: 'לוקוס: ' + locus, clear: () => { document.getElementById('filterLocus').value = '';  applyFilters(); } });
+  if (basket)   tags.push({ label: 'סל: ' + basket,   clear: () => { document.getElementById('filterBasket').value = ''; applyFilters(); } });
+  if (dateFrom) tags.push({ label: 'מ: ' + formatDate(dateFrom), clear: () => { document.getElementById('filterDateFrom').value = ''; applyFilters(); } });
+  if (dateTo)   tags.push({ label: 'עד: ' + formatDate(dateTo),  clear: () => { document.getElementById('filterDateTo').value = '';   applyFilters(); } });
+  tagsEl.innerHTML = tags.map((t, i) =>
+    `<span class="filter-tag" onclick="window._clearTag(${i})">
+      ${t.label}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </span>`
+  ).join('');
+  window._clearTag = (i) => tags[i].clear();
+
+  // Results count
+  const countEl = document.getElementById('resultsCount');
+  if (hasAny) {
+    countEl.textContent = `${filtered.length} ממצאים תואמים מתוך ${findings.length}`;
+  } else {
+    countEl.textContent = findings.length ? `${findings.length} ממצאים` : '';
+  }
+
+  renderFindings(filtered);
+}
+
+function toggleAreaFilter(letter) {
+  const current = document.getElementById('filterArea').value;
+  const next = current === letter ? '' : letter;
+  document.getElementById('filterArea').value = next;
+  document.querySelectorAll('.area-btn').forEach(btn => {
+    btn.classList.toggle('selected', btn.dataset.letter === next);
+  });
+  applyFilters();
+}
+
+
+function toggleFilterPanel() {
+  const panel = document.getElementById('filterPanel');
+  const chip = document.getElementById('chip-filters');
+  panel.classList.toggle('open');
+  chip.classList.toggle('active', panel.classList.contains('open'));
+}
+
+function focusFilter(fieldId) {
+  const panel = document.getElementById('filterPanel');
+  panel.classList.add('open');
+  document.getElementById('chip-filters').classList.add('active');
+  setTimeout(() => document.getElementById(fieldId)?.focus(), 50);
+}
+
+function resetFilters() {
+  document.getElementById('searchInput').value = '';
+  document.getElementById('filterSite').value = '';
+  document.getElementById('filterArea').value = '';
+  document.getElementById('filterLocus').value = '';
+  document.getElementById('filterBasket').value = '';
+  document.getElementById('filterDateFrom').value = '';
+  document.getElementById('filterDateTo').value = '';
+  document.querySelectorAll('.area-btn').forEach(btn => btn.classList.remove('selected'));
+  applyFilters();
+}
+
+
+function formatDate(dateStr) {
+  if (!dateStr) return '---';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;
+}
+
+// ═══════ DELETE ═══════
+function deleteFinding(id) {
+  findings = findings.filter(f => f.id !== id);
+  const uid = window._currentUser ? window._currentUser.id : 'guest';
+  localStorage.setItem('stratum_findings_' + uid, JSON.stringify(findings));
+  applyFilters();
+  updateSettingsCount();
+}
+
+// ═══════ DETAIL MODAL ═══════
+function openDetail(id) {
+  const f = findings.find(x => x.id === id);
+  if (!f) return;
+
+  const qrId = 'detail-qr-' + f.id;
+
+  document.getElementById('detailContent').innerHTML = `
+    <div class="detail-basket">
+      <div>
+        <label>מספר סל</label>
+        <span>${f.basketId}</span>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="printLabel('${f.id}')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+          הדפסה
+        </button>
+      </div>
+    </div>
+    ${f.imageUrl ? `<div class="detail-hero"><img src="${f.imageUrl}" /></div>` : ''}
+    <div class="detail-grid">
+      <div class="detail-field"><label>אתר</label><span>${f.site || '---'}</span></div>
+      <div class="detail-field"><label>תאריך</label><span>${formatDate(f.date)}</span></div>
+      <div class="detail-field"><label>שטח</label><span>${f.area}</span></div>
+      <div class="detail-field"><label>לוקוס</label><span>${f.locus || '---'}</span></div>
+    </div>
+    <div style="text-align:center;margin-bottom:20px;">
+      <div id="${qrId}" style="display:inline-block;"></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;font-family:'JetBrains Mono',monospace;">${f.basketId}</div>
+    </div>
+    <button class="btn btn-ghost" style="width:100%;" onclick="closeModal('detailModal')">סגור</button>
+  `;
+
+  document.getElementById('detailModal').classList.add('open');
+
+  if (typeof QRCode !== 'undefined') {
+    setTimeout(() => {
+      new QRCode(document.getElementById(qrId), {
+        text: f.basketId + '|' + (f.site||'') + '|' + f.date,
+        width: 80, height: 80, margin: 0
+      });
+    }, 100);
+  }
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+// ═══════ PRINT ═══════
+function printLabel(id) {
+  const f = findings.find(x => x.id === id);
+  if (!f) return;
+  const fd = new Date(f.date);
+  const fds = isNaN(fd.getTime()) ? f.date : fd.getDate()+'.'+(fd.getMonth()+1)+'.'+fd.getFullYear();
+  openNiimbotModal({ basketId: f.basketId, site: f.site, area: f.area, locus: f.locus, date: fds });
+}
+
+// ═══════ SETTINGS ═══════
+function toggleDark() {
+  darkMode = !darkMode;
+  localStorage.setItem('stratum_dark', darkMode);
+  if (darkMode) applyDark(); else removeDark();
+  document.getElementById('darkToggle').classList.toggle('on', darkMode);
+}
+
+function applyDark() {
+  document.documentElement.style.setProperty('--primary', '#a4cc4e');
+  document.documentElement.style.setProperty('--primary-light', '#b8e060');
+  document.documentElement.style.setProperty('--on-primary', '#1b1d0e');
+  document.documentElement.style.setProperty('--primary-container', '#3a5400');
+  document.documentElement.style.setProperty('--on-primary-container', '#d8f19d');
+  document.documentElement.style.setProperty('--surface', '#1b1d0e');
+  document.documentElement.style.setProperty('--on-surface', '#e4e4cc');
+  document.documentElement.style.setProperty('--surface-low', '#242614');
+  document.documentElement.style.setProperty('--surface-mid', '#2d2f1a');
+  document.documentElement.style.setProperty('--surface-high', '#363821');
+  document.documentElement.style.setProperty('--muted', '#8f9284');
+  document.documentElement.style.setProperty('--outline', '#45483c');
+  document.getElementById('darkToggle').classList.add('on');
+}
+
+function removeDark() {
+  ['--primary','--primary-light','--on-primary','--primary-container','--on-primary-container',
+   '--surface','--on-surface','--surface-low','--surface-mid','--surface-high','--muted','--outline'].forEach(v =>
+    document.documentElement.style.removeProperty(v)
+  );
+  document.getElementById('darkToggle').classList.remove('on');
+}
+
+function setLang(lang) {
+  currentLang = lang;
+  localStorage.setItem('stratum_lang', lang);
+  document.getElementById('langHe').classList.toggle('selected', lang === 'he');
+  document.getElementById('langEn').classList.toggle('selected', lang === 'en');
+  // Update dir
+  document.documentElement.dir = lang === 'he' ? 'rtl' : 'ltr';
+}
+
+function showLogoutConfirm() {
+  document.getElementById('logoutModal').classList.add('open');
+}
+
+// doLogout handled by Firebase module above
+
+// ═══════ EDIT ═══════
+function openEdit(id) {
+  const f = findings.find(x => x.id === id);
+  if (!f) return;
+  document.getElementById('editId').value = f.id;
+  document.getElementById('editDate').value = f.date || '';
+  document.getElementById('editSite').value = f.site || '';
+  document.getElementById('editArea').value = f.area || 'A';
+  document.getElementById('editLocus').value = f.locus || '';
+  document.getElementById('editBasket').value = f.basketId || '';
+  document.getElementById('editModal').classList.add('open');
+}
+
+function saveEdit() {
+  const id = document.getElementById('editId').value;
+  const idx = findings.findIndex(x => x.id === id);
+  if (idx === -1) return;
+  findings[idx] = {
+    ...findings[idx],
+    date: document.getElementById('editDate').value,
+    site: document.getElementById('editSite').value || 'אתר לא ידוע',
+    area: document.getElementById('editArea').value,
+    locus: document.getElementById('editLocus').value || '---',
+    basketId: document.getElementById('editBasket').value || findings[idx].basketId,
+  };
+  const uid = window._currentUser ? window._currentUser.id : 'guest';
+  localStorage.setItem('stratum_findings_' + uid, JSON.stringify(findings));
+  closeModal('editModal');
+  applyFilters();
+}
+
+// ═══════ DUPLICATE ═══════
+function duplicateFinding(id) {
+  const f = findings.find(x => x.id === id);
+  if (!f) return;
+  const copy = { ...f, id: Date.now().toString(), basketId: f.basketId + '-עותק', createdAt: new Date().toISOString() };
+  findings.unshift(copy);
+  const uid = window._currentUser ? window._currentUser.id : 'guest';
+  localStorage.setItem('stratum_findings_' + uid, JSON.stringify(findings));
+  applyFilters();
+  updateSettingsCount();
+  // Flash feedback
+  setTimeout(() => {
+    const cards = document.querySelectorAll('.finding-card');
+    if (cards[0]) { cards[0].style.outline = '2px solid var(--primary)'; setTimeout(() => cards[0].style.outline = '', 1200); }
+  }, 50);
+}
+
+function updateSettingsCount() {
+  const el = document.getElementById('findingsCount');
+  if (el) el.textContent = findings.length;
+}
+</script>
+</body>
+</html>
