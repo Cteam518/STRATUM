@@ -12,7 +12,7 @@
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
   import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
   import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
-  import { getFirestore, collection, doc, setDoc, getDocs, query, where, deleteDoc } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
+  import { getFirestore, collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyBa83_i9jILL0X7wF_jI_-IvPRYdXFSQn4",
@@ -34,6 +34,9 @@
     return 'stratum_findings_' + uid;
   }
 
+  const FIRESTORE_BASE_URL = 'https://cteam518.github.io/STRATUM';
+  let previewFindingId = Date.now().toString();
+
   function saveUserProfile(user) {
     if (!user) return;
     const profile = {
@@ -42,6 +45,35 @@
       email: user.email || '',
     };
     localStorage.setItem('stratum_user_' + user.uid, JSON.stringify(profile));
+  }
+
+  function buildStratumLink(data) {
+    if (!data.id) return FIRESTORE_BASE_URL;
+    const params = new URLSearchParams({ id: data.id });
+    return `${FIRESTORE_BASE_URL}/?${params.toString()}`;
+  }
+
+  function getDeepLinkFindingId() {
+    return new URLSearchParams(window.location.search).get('id');
+  }
+
+  async function loadDeepLinkFinding(id) {
+    if (!id) return;
+    try {
+      const docRef = doc(db, 'findings', id);
+      const snap = await getDoc(docRef);
+      if (!snap.exists()) return;
+      const data = snap.data();
+      if (data.uid !== window._currentUser?.id) return;
+      const finding = { id: snap.id, ...data };
+      const foundIndex = findings.findIndex(f => f.id === finding.id);
+      if (foundIndex === -1) findings.unshift(finding);
+      else findings[foundIndex] = finding;
+      renderFindings();
+      openDetail(finding.id);
+    } catch (error) {
+      console.error('Error loading deep link finding:', error);
+    }
   }
 
   async function loadUserFindings(uid) {
@@ -73,6 +105,7 @@
   }
 
   window.getUserFindingsKey = getUserFindingsKey;
+  window.buildStratumLink = buildStratumLink;
   window.syncFindingToFirestore = syncFindingToFirestore;
   window.deleteFindingFromFirestore = deleteFindingFromFirestore;
   window.loadUserFindings = loadUserFindings;
@@ -98,6 +131,8 @@
       };
       saveUserProfile(user);
       await loadUserFindings(user.uid);
+      const deepId = getDeepLinkFindingId();
+      if (deepId) await loadDeepLinkFinding(deepId);
       applyFilters();
       updateSettingsCount();
     } else {
@@ -1249,6 +1284,7 @@ function generateBasketId() {
              letters[Math.floor(Math.random()*letters.length)] +
              letters[Math.floor(Math.random()*letters.length)] +
              Math.floor(100+Math.random()*900);
+  previewFindingId = Date.now().toString();
   document.getElementById('entryBasket').value = id;
   updatePreview();
 }
@@ -1274,7 +1310,7 @@ function updatePreview() {
   const qrEl = document.getElementById('prev-qr');
   qrEl.innerHTML = '';
   if (typeof QRCode !== 'undefined') {
-    const qrText = `D:${dateStr}|S:${site||'---'}|A:${area}|B:${basket}|L:${locus||'---'}`;
+    const qrText = buildStratumLink({ id: previewFindingId });
     try {
       new QRCode(qrEl, { text: qrText, width: 90, height: 90, margin: 0, correctLevel: QRCode.CorrectLevel.L });
     } catch (error) {
@@ -1326,7 +1362,7 @@ async function saveAndPrint() {
 }
 
 async function openNiimbotModal(f) {
-  const qrText = 'D:'+f.date+'|S:'+(f.site||'---')+'|A:'+f.area+'|B:'+f.basketId+'|L:'+(f.locus||'---');
+  const qrText = buildStratumLink({ id: f.id });
 
   // Step 1: generate QR using qrcode-generator, draw manually on canvas
   const qr = qrcode(0, 'L');
@@ -1422,7 +1458,7 @@ async function saveFinding(saveOnly, buttonEl) {
   const basket = document.getElementById('entryBasket').value || 'ASD123';
 
   const finding = {
-    id: Date.now().toString(),
+    id: previewFindingId || Date.now().toString(),
     basketId: basket,
     site, date, area, locus,
     imageUrl: capturedImage || null,
@@ -1440,6 +1476,8 @@ async function saveFinding(saveOnly, buttonEl) {
       console.error('Error saving finding to Firestore:', error);
     }
   }
+
+  previewFindingId = Date.now().toString();
 
   // Reset form
   capturedImage = null;
@@ -1706,7 +1744,7 @@ function openDetail(id) {
   if (typeof QRCode !== 'undefined') {
     setTimeout(() => {
       new QRCode(document.getElementById(qrId), {
-        text: f.basketId + '|' + (f.site||'') + '|' + f.date,
+        text: buildStratumLink({ id: f.id }),
         width: 80, height: 80, margin: 0
       });
     }, 100);
