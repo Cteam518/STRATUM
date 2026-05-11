@@ -11,7 +11,7 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
   import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
-  import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
+  import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
   import { getFirestore, collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -141,18 +141,13 @@
   }
 
   function signInWithGoogle() {
-    signInWithPopup(auth, provider)
-      .then((result) => {
-        const user = result.user;
-        updateLoginUI(user);
-      })
-      .catch((error) => {
-        const errElement = document.getElementById('loginError');
-        if (errElement) {
-          errElement.textContent = 'שגיאה בהתחברות עם גוגל: ' + (error.message || error.code);
-          errElement.style.display = 'block';
-        }
-      });
+    signInWithRedirect(auth, provider).catch((error) => {
+      const errElement = document.getElementById('loginError');
+      if (errElement) {
+        errElement.textContent = 'שגיאה בהתחברות עם גוגל: ' + (error.message || error.code);
+        errElement.style.display = 'block';
+      }
+    });
   }
 
   window.doLogout = function() {
@@ -166,9 +161,18 @@
     });
   };
 
-  window.initAuth = function() {
+  window.initAuth = async function() {
     const errorEl = document.getElementById('loginError');
     if (errorEl) errorEl.style.display = 'none';
+    try {
+      const result = await getRedirectResult(auth);
+      if (result?.user) {
+        await updateLoginUI(result.user);
+        return;
+      }
+    } catch (error) {
+      console.warn('Redirect sign-in result error:', error);
+    }
     onAuthStateChanged(auth, (user) => {
       if (user) {
         void updateLoginUI(user);
