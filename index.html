@@ -8,100 +8,152 @@
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800;900&family=Public+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
-<script>
-// ═══════ PIN AUTH ═══════
-function initAuth() {
-  const users = JSON.parse(localStorage.getItem('stratum_users') || '[]');
-  if (users.length === 0) {
-    showView('register');
-  } else {
-    const lastUser = users[users.length - 1];
-    showView('login');
-    document.getElementById('loginGreeting').textContent = 'שלום, ' + lastUser.name + ' 👋';
-    document.getElementById('loginBigAvatar').textContent = lastUser.name.charAt(0).toUpperCase();
-    window._loginUser = lastUser;
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
+  import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
+  import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
+  import { getFirestore, collection, doc, setDoc, getDocs, query, where, deleteDoc } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBa83_i9jILL0X7wF_jI_-IvPRYdXFSQn4",
+    authDomain: "stratum-518.firebaseapp.com",
+    projectId: "stratum-518",
+    storageBucket: "stratum-518.firebasestorage.app",
+    messagingSenderId: "1075664668260",
+    appId: "1:1075664668260:web:bd778dd892229daf7a0171",
+    measurementId: "G-YC83RP2KGY"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const analytics = getAnalytics(app);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const provider = new GoogleAuthProvider();
+
+  function getUserFindingsKey(uid) {
+    return 'stratum_findings_' + uid;
   }
-}
 
-function showView(v) {
-  document.getElementById('viewRegister').style.display = v === 'register' ? 'block' : 'none';
-  document.getElementById('viewLogin').style.display = v === 'login' ? 'block' : 'none';
-  document.getElementById('loginError').style.display = 'none';
-}
-
-function doRegister() {
-  const name = document.getElementById('regName').value.trim();
-  const pin = document.getElementById('regPin').value;
-  const pin2 = document.getElementById('regPin2').value;
-  const err = document.getElementById('loginError');
-
-  if (!name) { showError('נא להזין שם'); return; }
-  if (pin.length !== 4 || !/^\d{4}$/.test(pin)) { showError('קוד PIN חייב להיות 4 ספרות'); return; }
-  if (pin !== pin2) { showError('קודי ה-PIN אינם תואמים'); return; }
-
-  const users = JSON.parse(localStorage.getItem('stratum_users') || '[]');
-  const user = { name, pinHash: btoa(pin), id: Date.now().toString() };
-  users.push(user);
-  localStorage.setItem('stratum_users', JSON.stringify(users));
-  enterApp(user);
-}
-
-function doLogin() {
-  const pin = document.getElementById('loginPin').value;
-  const user = window._loginUser;
-  if (!user) return;
-  if (btoa(pin) !== user.pinHash) {
-    showError('קוד PIN שגוי');
-    document.getElementById('loginPin').value = '';
-    return;
+  function saveUserProfile(user) {
+    if (!user) return;
+    const profile = {
+      uid: user.uid,
+      name: user.displayName || 'משתמש',
+      email: user.email || '',
+    };
+    localStorage.setItem('stratum_user_' + user.uid, JSON.stringify(profile));
   }
-  enterApp(user);
-}
 
-function showError(msg) {
-  const err = document.getElementById('loginError');
-  err.textContent = msg;
-  err.style.display = 'block';
-}
+  async function loadUserFindings(uid) {
+    findings = [];
+    if (!uid) return;
+    try {
+      const q = query(collection(db, 'findings'), where('uid', '==', uid));
+      const snapshot = await getDocs(q);
+      findings = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      localStorage.setItem(getUserFindingsKey(uid), JSON.stringify(findings));
+    } catch (error) {
+      console.error('Error loading Firestore findings:', error);
+      findings = JSON.parse(localStorage.getItem(getUserFindingsKey(uid)) || '[]');
+    }
+  }
 
-function enterApp(user) {
-  window._currentUser = user;
-  document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('appRoot').style.display = 'flex';
-  // Update avatar
-  const avatar = document.getElementById('profileAvatar');
-  if (avatar) avatar.textContent = user.name.charAt(0).toUpperCase();
-  // Update logout modal
-  const ln = document.getElementById('logoutUserName');
-  const le = document.getElementById('logoutUserEmail');
-  if (ln) ln.textContent = user.name;
-  if (le) le.textContent = 'STRATUM · ' + user.id.slice(-4);
-  // Load this user findings
-  findings = JSON.parse(localStorage.getItem('stratum_findings_' + user.id) || '[]');
-  applyFilters();
-  updateSettingsCount();
-}
+  async function syncFindingToFirestore(finding) {
+    if (!window._currentUser?.id) return;
+    const docRef = doc(db, 'findings', finding.id);
+    await setDoc(docRef, { ...finding, uid: window._currentUser.id });
+  }
 
-window.doLogout = function() {
-  window._currentUser = null;
-  findings = [];
-  closeModal('logoutModal');
-  document.getElementById('appRoot').style.display = 'none';
-  document.getElementById('loginScreen').style.display = 'flex';
-  // Reset pin field
-  const lp = document.getElementById('loginPin');
-  if (lp) lp.value = '';
-  initAuth();
-};
+  async function deleteFindingFromFirestore(id) {
+    if (!window._currentUser?.id) return;
+    const docRef = doc(db, 'findings', id);
+    await deleteDoc(docRef);
+  }
 
-window.onload = () => {
-  initAuth();
-  const today = new Date().toISOString().split('T')[0];
-  document.getElementById('entryDate').value = today;
-  generateBasketId();
-  if (darkMode) applyDark();
-  updatePreview();
-};
+  window.getUserFindingsKey = getUserFindingsKey;
+  window.syncFindingToFirestore = syncFindingToFirestore;
+  window.deleteFindingFromFirestore = deleteFindingFromFirestore;
+  window.loadUserFindings = loadUserFindings;
+
+  async function updateLoginUI(user) {
+    const loginScreen = document.getElementById('loginScreen');
+    const appRoot = document.getElementById('appRoot');
+    if (user) {
+      loginScreen.style.display = 'none';
+      appRoot.style.display = 'flex';
+      const avatar = document.getElementById('profileAvatar');
+      const name = user.displayName || 'משתמש';
+      const email = user.email || '';
+      if (avatar) avatar.textContent = (name.charAt(0) || 'S').toUpperCase();
+      const logoutName = document.getElementById('logoutUserName');
+      const logoutEmail = document.getElementById('logoutUserEmail');
+      if (logoutName) logoutName.textContent = name;
+      if (logoutEmail) logoutEmail.textContent = email;
+      window._currentUser = {
+        id: user.uid,
+        name,
+        email,
+      };
+      saveUserProfile(user);
+      await loadUserFindings(user.uid);
+      applyFilters();
+      updateSettingsCount();
+    } else {
+      appRoot.style.display = 'none';
+      loginScreen.style.display = 'flex';
+    }
+  }
+
+  function signInWithGoogle() {
+    signInWithPopup(auth, provider)
+      .then((result) => {
+        const user = result.user;
+        updateLoginUI(user);
+      })
+      .catch((error) => {
+        const errElement = document.getElementById('loginError');
+        if (errElement) {
+          errElement.textContent = 'שגיאה בהתחברות עם גוגל: ' + (error.message || error.code);
+          errElement.style.display = 'block';
+        }
+      });
+  }
+
+  window.doLogout = function() {
+    signOut(auth).then(() => {
+      window._currentUser = null;
+      findings = [];
+      closeModal('logoutModal');
+      updateLoginUI(null);
+    }).catch((error) => {
+      console.error('Logout error', error);
+    });
+  };
+
+  window.initAuth = function() {
+    const errorEl = document.getElementById('loginError');
+    if (errorEl) errorEl.style.display = 'none';
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        void updateLoginUI(user);
+      } else {
+        updateLoginUI(null);
+      }
+    });
+  };
+
+  window.signInWithGoogle = signInWithGoogle;
+
+  window.onload = () => {
+    initAuth();
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('entryDate').value = today;
+    generateBasketId();
+    if (darkMode) applyDark();
+    updatePreview();
+  };
 </script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -688,40 +740,13 @@ window.onload = () => {
       <div style="font-size:13px;color:var(--muted);margin-top:8px;font-style:italic;">תיעוד סטרטיגרפי מקצועי</div>
     </div>
 
-    <!-- REGISTER view (shown first time) -->
-    <div id="viewRegister" style="display:none;">
-      <div style="font-family:'Manrope',sans-serif;font-size:17px;font-weight:800;margin-bottom:6px;text-align:center;">יצירת חשבון</div>
-      <div style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:24px;">הזן שם ובחר קוד PIN</div>
-      <div style="margin-bottom:14px;">
-        <label style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">שם</label>
-        <input id="regName" type="text" placeholder="השם שלך..." class="form-input" style="width:100%;" />
-      </div>
-      <div style="margin-bottom:14px;">
-        <label style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">קוד PIN (4 ספרות)</label>
-        <input id="regPin" type="password" inputmode="numeric" maxlength="4" placeholder="••••" class="form-input" style="width:100%;letter-spacing:6px;font-size:20px;text-align:center;" />
-      </div>
-      <div style="margin-bottom:24px;">
-        <label style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">אימות PIN</label>
-        <input id="regPin2" type="password" inputmode="numeric" maxlength="4" placeholder="••••" class="form-input" style="width:100%;letter-spacing:6px;font-size:20px;text-align:center;" />
-      </div>
-      <button onclick="doRegister()" class="btn btn-primary" style="width:100%;margin-bottom:14px;">צור חשבון</button>
-      <button onclick="showView('login')" style="width:100%;background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:8px;">יש לי כבר חשבון</button>
-    </div>
+    <div style="font-family:'Manrope',sans-serif;font-size:17px;font-weight:800;margin-bottom:6px;text-align:center;">התחבר עם חשבון Google</div>
+    <div style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:24px;">כדי לשמור ולגשת לרישומים שלך מכל מכשיר.</div>
 
-    <!-- LOGIN view -->
-    <div id="viewLogin" style="display:none;">
-      <div style="font-family:'Manrope',sans-serif;font-size:17px;font-weight:800;margin-bottom:6px;text-align:center;" id="loginGreeting">ברוך הבא</div>
-      <div style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:24px;">הזן את קוד ה-PIN שלך</div>
-      <div id="loginAvatarWrap" style="text-align:center;margin-bottom:20px;">
-        <div id="loginBigAvatar" style="width:60px;height:60px;border-radius:50%;background:var(--primary);display:inline-flex;align-items:center;justify-content:center;color:white;font-family:'Manrope',sans-serif;font-weight:800;font-size:24px;">?</div>
-      </div>
-      <div style="margin-bottom:24px;">
-        <label style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">קוד PIN</label>
-        <input id="loginPin" type="password" inputmode="numeric" maxlength="4" placeholder="••••" class="form-input" style="width:100%;letter-spacing:6px;font-size:20px;text-align:center;" onkeydown="if(event.key==='Enter')doLogin()" />
-      </div>
-      <button onclick="doLogin()" class="btn btn-primary" style="width:100%;margin-bottom:14px;">כניסה</button>
-      <button onclick="showView('register')" style="width:100%;background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:8px;">חשבון חדש</button>
-    </div>
+    <button onclick="signInWithGoogle()" class="btn btn-primary" style="width:100%;margin-bottom:14px;display:flex;align-items:center;justify-content:center;gap:10px;">
+      <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="20" height="20" alt="Google">
+      התחבר עם גוגל
+    </button>
 
     <div id="loginError" style="display:none;margin-top:16px;padding:10px 14px;background:#fff0f0;border:1px solid #ffc5c5;border-radius:8px;font-size:13px;color:#ba1a1a;text-align:center;"></div>
   </div>
@@ -954,7 +979,7 @@ window.onload = () => {
 
       <!-- Save buttons -->
       <div style="display:flex;gap:10px;margin-bottom:10px;">
-        <button class="btn btn-ghost" style="flex:1;gap:8px;flex-direction:column;padding:12px 8px;" onclick="saveFinding(true)">
+        <button class="btn btn-ghost" style="flex:1;gap:8px;flex-direction:column;padding:12px 8px;" onclick="saveFinding(true, this)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
           שמירה בלבד
         </button>
@@ -962,7 +987,7 @@ window.onload = () => {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
           שמור והדפס
         </button>
-        <button class="btn btn-primary" style="flex:2;gap:8px;" onclick="saveFinding(false)">
+        <button class="btn btn-primary" style="flex:2;gap:8px;" onclick="saveFinding(false, this)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
           צלם וממצא
         </button>
@@ -1195,7 +1220,7 @@ window.onload = () => {
 
 <script>
 // ═══════ STATE ═══════
-let findings = JSON.parse(localStorage.getItem('stratum_findings') || '[]');
+let findings = [];
 let darkMode = localStorage.getItem('stratum_dark') === 'true';
 let currentLang = localStorage.getItem('stratum_lang') || 'he';
 let capturedImage = null;
@@ -1249,8 +1274,12 @@ function updatePreview() {
   const qrEl = document.getElementById('prev-qr');
   qrEl.innerHTML = '';
   if (typeof QRCode !== 'undefined') {
-    const qrText = `תאריך:${dateStr}|אתר:${site||'---'}|שטח:${area}|סל:${basket}|לוקוס:${locus||'---'}`;
-    new QRCode(qrEl, { text: qrText, width: 90, height: 90, margin: 0, correctLevel: QRCode.CorrectLevel.M });
+    const qrText = `D:${dateStr}|S:${site||'---'}|A:${area}|B:${basket}|L:${locus||'---'}`;
+    try {
+      new QRCode(qrEl, { text: qrText, width: 90, height: 90, margin: 0, correctLevel: QRCode.CorrectLevel.L });
+    } catch (error) {
+      qrEl.textContent = 'QR גדול מדי';
+    }
   }
 }
 
@@ -1297,10 +1326,10 @@ async function saveAndPrint() {
 }
 
 async function openNiimbotModal(f) {
-  const qrText = 'תאריך:'+f.date+'|אתר:'+(f.site||'---')+'|שטח:'+f.area+'|סל:'+f.basketId+'|לוקוס:'+(f.locus||'---');
+  const qrText = 'D:'+f.date+'|S:'+(f.site||'---')+'|A:'+f.area+'|B:'+f.basketId+'|L:'+(f.locus||'---');
 
   // Step 1: generate QR using qrcode-generator, draw manually on canvas
-  const qr = qrcode(0, 'M');
+  const qr = qrcode(0, 'L');
   qr.addData(qrText);
   qr.make();
   const moduleCount = qr.getModuleCount();
@@ -1385,7 +1414,7 @@ async function openNiimbotModal(f) {
 }
 
 // ═══════ SAVE FINDING ═══════
-function saveFinding(saveOnly) {
+async function saveFinding(saveOnly, buttonEl) {
   const date = document.getElementById('entryDate').value;
   const site = document.getElementById('entrySite').value || 'אתר לא ידוע';
   const area = document.getElementById('entryArea').value;
@@ -1402,7 +1431,15 @@ function saveFinding(saveOnly) {
 
   findings.unshift(finding);
   const uid = window._currentUser ? window._currentUser.id : 'guest';
-  localStorage.setItem('stratum_findings_' + uid, JSON.stringify(findings));
+  localStorage.setItem(getUserFindingsKey(uid), JSON.stringify(findings));
+
+  if (window._currentUser?.id) {
+    try {
+      await syncFindingToFirestore(finding);
+    } catch (error) {
+      console.error('Error saving finding to Firestore:', error);
+    }
+  }
 
   // Reset form
   capturedImage = null;
@@ -1419,15 +1456,13 @@ function saveFinding(saveOnly) {
   renderFindings();
   updateSettingsCount();
 
-  if (saveOnly) {
-    // stay, show brief confirmation
-    const btn = event.target;
-    const orig = btn.innerHTML;
-    btn.innerHTML = '✓ נשמר!';
-    btn.style.background = 'var(--primary)';
-    btn.style.color = 'white';
-    setTimeout(() => { btn.innerHTML = orig; btn.style.background = ''; btn.style.color = ''; }, 1500);
-  } else {
+  if (saveOnly && buttonEl) {
+    const orig = buttonEl.innerHTML;
+    buttonEl.innerHTML = '✓ נשמר!';
+    buttonEl.style.background = 'var(--primary)';
+    buttonEl.style.color = 'white';
+    setTimeout(() => { buttonEl.innerHTML = orig; buttonEl.style.background = ''; buttonEl.style.color = ''; }, 1500);
+  } else if (!saveOnly) {
     navigate('reservoir');
   }
 }
@@ -1617,10 +1652,17 @@ function formatDate(dateStr) {
 }
 
 // ═══════ DELETE ═══════
-function deleteFinding(id) {
+async function deleteFinding(id) {
   findings = findings.filter(f => f.id !== id);
   const uid = window._currentUser ? window._currentUser.id : 'guest';
-  localStorage.setItem('stratum_findings_' + uid, JSON.stringify(findings));
+  localStorage.setItem(getUserFindingsKey(uid), JSON.stringify(findings));
+  if (window._currentUser?.id) {
+    try {
+      await deleteFindingFromFirestore(id);
+    } catch (error) {
+      console.error('Error deleting Firestore finding:', error);
+    }
+  }
   applyFilters();
   updateSettingsCount();
 }
@@ -1744,7 +1786,7 @@ function openEdit(id) {
   document.getElementById('editModal').classList.add('open');
 }
 
-function saveEdit() {
+async function saveEdit() {
   const id = document.getElementById('editId').value;
   const idx = findings.findIndex(x => x.id === id);
   if (idx === -1) return;
@@ -1757,19 +1799,33 @@ function saveEdit() {
     basketId: document.getElementById('editBasket').value || findings[idx].basketId,
   };
   const uid = window._currentUser ? window._currentUser.id : 'guest';
-  localStorage.setItem('stratum_findings_' + uid, JSON.stringify(findings));
+  localStorage.setItem(getUserFindingsKey(uid), JSON.stringify(findings));
+  if (window._currentUser?.id) {
+    try {
+      await syncFindingToFirestore(findings[idx]);
+    } catch (error) {
+      console.error('Error updating Firestore finding:', error);
+    }
+  }
   closeModal('editModal');
   applyFilters();
 }
 
 // ═══════ DUPLICATE ═══════
-function duplicateFinding(id) {
+async function duplicateFinding(id) {
   const f = findings.find(x => x.id === id);
   if (!f) return;
   const copy = { ...f, id: Date.now().toString(), basketId: f.basketId + '-עותק', createdAt: new Date().toISOString() };
   findings.unshift(copy);
   const uid = window._currentUser ? window._currentUser.id : 'guest';
-  localStorage.setItem('stratum_findings_' + uid, JSON.stringify(findings));
+  localStorage.setItem(getUserFindingsKey(uid), JSON.stringify(findings));
+  if (window._currentUser?.id) {
+    try {
+      await syncFindingToFirestore(copy);
+    } catch (error) {
+      console.error('Error duplicating Firestore finding:', error);
+    }
+  }
   applyFilters();
   updateSettingsCount();
   // Flash feedback
