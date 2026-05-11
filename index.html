@@ -64,7 +64,6 @@
       const snap = await getDoc(docRef);
       if (!snap.exists()) return;
       const data = snap.data();
-      if (data.uid !== window._currentUser?.id) return;
       const finding = { id: snap.id, ...data };
       const foundIndex = findings.findIndex(f => f.id === finding.id);
       if (foundIndex === -1) findings.unshift(finding);
